@@ -1,7 +1,6 @@
 import Fastify from "fastify";
 import dotenv from "dotenv";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import fastifyCors from "fastify-cors";
 
 dotenv.config();
 
