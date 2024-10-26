@@ -84,7 +84,7 @@ app.post("/api/ask-ai", async (req, res) => {
 
     let botResponse = result.response.text();
     botResponse = botResponse.replace(/بواسطة جوجل/g, "بواسطة سند سليمان");
-    botResponse = botResponse.replace(/جوجل/g, "سند سليمان");
+    botResponse = botResponse.replace(/by Google/g, "by sanadSuliman");
     botResponse = botResponse.replace(
       /trained by Google/g,
       "trained by SanadSuliman"
