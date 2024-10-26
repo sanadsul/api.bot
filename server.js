@@ -1,72 +1,107 @@
-import express from "express";
+import Fastify from "fastify";
 import dotenv from "dotenv";
-import cors from "cors";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import helmet from "helmet";
+import fastifyCors from "fastify-cors";
 
 dotenv.config();
 
-const app = express();
+const app = Fastify();
 
-// Middleware
-app.use(cors({ origin: "*" }));
-app.use(express.json());
-app.use(helmet());
+// إضافة إعدادات CORS يدوياً
+app.addHook("onRequest", (request, reply, done) => {
+  const allowedOrigin = "http://localhost:5173";
+  const requestOrigin = request.headers.origin;
+
+  if (requestOrigin === allowedOrigin) {
+    reply.header("Access-Control-Allow-Origin", allowedOrigin);
+    reply.header(
+      "Access-Control-Allow-Methods",
+      "GET, POST, PUT, DELETE, OPTIONS"
+    );
+    reply.header("Access-Control-Allow-Headers", "Content-Type");
+    done();
+  } else {
+    return reply.status(503).send();
+  }
+});
+
+// معالجة طلبات OPTIONS (Preflight) للتأكد من نجاح CORS
+app.options("/*", (request, reply) => {
+  reply
+    .header("Access-Control-Allow-Origin", "http://localhost:5173")
+    .header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+    .header("Access-Control-Allow-Headers", "Content-Type")
+    .status(200)
+    .send();
+});
 
 let conversationContext = ""; // حفظ المحادثة في هذا المتغير
 
-app.post("/api/ask-ai", async (req, res) => {
-  const { question } = req.body;
+app.post("/api/ask-ai", async (request, reply) => {
+  const { question } = request.body;
 
   if (!question) {
-    return res.status(400).json({ error: "Question is required" });
+    return reply.status(400).send({ error: "يجب توفير السؤال" });
   }
 
   try {
     const apiKey = process.env.GOOGLE_API_KEY;
     const genAI = new GoogleGenerativeAI(apiKey);
 
-    // إضافة السؤال الجديد إلى السياق السابق
     conversationContext += `User: ${question}\nAI:`;
 
     const model = genAI.getGenerativeModel({
-      model: "gemini-1.5-flash-8b",
+      model: "gemini-1.5-flash",
       generationConfig: {
         candidateCount: 1,
         temperature: 0.2,
       },
     });
 
-    // إرسال السياق الكامل للنموذج لتوليد الرد
     const result = await model.generateContent(conversationContext);
-    let botResponse = result.response.text();
 
+    if (result.status === 492) {
+      console.warn("خطأ 492: الطلب كبير جدًا ولا يمكن معالجته.");
+      return reply
+        .status(400)
+        .send({ error: "خطأ 492: الطلب كبير جدًا ولا يمكن معالجته." });
+    }
+
+    if (result.response.candidates[0].safety === "BLOCKED") {
+      console.warn("تم حظر الرد لأسباب تتعلق بالسلامة:", question);
+      return reply.send({ response: "عذرًا، لا يمكنني الرد على هذا السؤال." });
+    }
+
+    let botResponse = result.response.text();
     botResponse = botResponse.replace(/بواسطة جوجل/g, "بواسطة سند سليمان");
     botResponse = botResponse.replace(/جوجل/g, "سند سليمان");
     botResponse = botResponse.replace(
-      /سند سليمان/g,
-      ` سند سليمان، مطور باك اند وFull Stack بخبرة تزيد عن 7 سنوات في مجال تطوير البرمجيات. أمتلك شغفاً عميقاً بتكنولوجيا المعلومات وتطوير الحلول البرمجية المبتكرة. أتقن عدة لغات برمجة منها Node.js وPython، مما يمكنني من تصميم وبناء تطبيقات ويب فعالة وقابلة للتوسع.
-
-خلال مسيرتي المهنية، عملت على مجموعة متنوعة من المشاريع التي شملت تطوير واجهات برمجة التطبيقات (APIs) وتكامل الأنظمة، بالإضافة إلى تحسين الأداء وتجربة المستخدم. أؤمن بأهمية كتابة الكود النظيف والمستدام، وأسعى دائماً لتطبيق أفضل الممارسات في تطوير البرمجيات.
-
-أنا متحمس دائماً لتعلم التقنيات الجديدة واستكشاف الحلول المبتكرة التي تعزز من قدرة البرمجيات على تلبية احتياجات المستخدمين. أعيش لحظات الإبداع والابتكار، وأسعى إلى المساهمة في مشاريع تكنولوجية تؤثر إيجابياً على المجتمع.
-
-`
+      /trained by Google/g,
+      "trained by SanadSuliman"
     );
 
-    // تحديث المحادثة الجديدة
     conversationContext += ` ${botResponse}\n`;
-
-    // إعادة الرد إلى العميل
-    res.json({ response: botResponse });
+    console.log(botResponse);
+    reply.send({ response: botResponse });
   } catch (error) {
-    console.error("Error generating conversation:", error);
-    res.status(500).send("Server error");
+    console.error("خطأ في توليد الرد:", error);
+
+    if (error.status === 429) {
+      return reply
+        .status(429)
+        .send({ error: "تم تجاوز الحد الأقصى للطلبات، يرجى المحاولة لاحقًا." });
+    }
+
+    reply.status(500).send({ error: "خطأ في السيرفر" });
   }
 });
 
 const PORT = process.env.PORT || 5005;
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+app.listen({ port: PORT }, (err, address) => {
+  if (err) {
+    console.error("خطأ في بدء الخادم:", err);
+    process.exit(1);
+  }
+  console.log(`Server running on ${address}`);
 });
